@@ -1,8 +1,10 @@
 package info.sroman.crunchyfrog;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.wifi.WifiManager;
@@ -23,7 +25,7 @@ public class MainActivity extends Activity {
 
         this.startForegroundService(new Intent().setClass(this, SensorCollectionService.class));
 //        this.startForegroundService(new Intent().setClass(this, WifiCollectionService.class));
-        finish();
+//        finish();
     }
 
     private void createNotificationChannel() {
@@ -37,8 +39,14 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+    }
+
+    @Override
     protected void onDestroy() {
         this.unregisterReceiver(WifiScanReceiverFactory.getInstance());
+        SensorCollectionService.service.dumpSensorQueue();
         super.onDestroy();
     }
 }

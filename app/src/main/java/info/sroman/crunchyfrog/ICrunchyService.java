@@ -5,6 +5,10 @@ import android.content.Context;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.NotificationManagerCompat;
 
+import com.android.volley.Request;
+import com.android.volley.RequestQueue;
+import com.android.volley.toolbox.StringRequest;
+
 public interface ICrunchyService {
     default void startServiceAndNotify(Context context,
                                        IntentService service,
@@ -24,4 +28,15 @@ public interface ICrunchyService {
         service.startForeground(14, mBuilder.build());
     }
 
+    default void makePost(String url, String msg) {
+        RequestQueue queue = VolleyQueueFactory.getInstance((Context) this);
+        StringRequest stringRequest =
+                new StringRequest(
+                        Request.Method.POST,
+                        url,
+                        System.out::println,
+                        System.out::println
+                );
+            queue.add(stringRequest);
+        }
 }

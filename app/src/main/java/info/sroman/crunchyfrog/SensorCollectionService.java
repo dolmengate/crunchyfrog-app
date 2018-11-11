@@ -9,32 +9,44 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.support.annotation.NonNull;
 
+import com.google.gson.Gson;
+
 import java.util.Arrays;
+import java.util.Queue;
+import java.util.concurrent.LinkedTransferQueue;
 
 public class SensorCollectionService extends IntentService implements SensorEventListener, ICrunchyService {
 
-    private static int SENSOR_COLLECTION_SERVICE_RUNTIME = 0;
+    public static SensorCollectionService service;
 
-    private static int SAMPLING_RATE = Integer.MAX_VALUE;
-    private static int MAX_REPORT_LATENCY = 5 * 60 * 100; // in microseconds
+    private static final String URL = "";
 
-    private Sensor sTemperature;
+    private static long lastRequestTime = 0;
+    private static final long MAX_REQUEST_DELAY = 1000 * 1; // 1 seconds
+    private static final int MAX_QUEUE_SIZE = 100;
+
+    private static Queue<SensorEvent> sensorEventQueue = new LinkedTransferQueue<>();
+
+    private static final int SAMPLING_DELAY = Integer.MAX_VALUE;
+    private static final int MAX_REPORT_LATENCY = 5 * 60 * 100; // in microseconds
+
     private Sensor sAccelerometer;
-    private Sensor sLight;
-    private Sensor sPressure;
 
-    private float[] lastPressure = new float[1];
-    private float[] lastTemp = new float[1];
     private float[] lastAccel= new float[3];
-    private float[] lastLight = new float[1]; // in lux
 
     public SensorCollectionService() {
         super("SensorCollectionService");
     }
 
     @Override
+    public void onCreate() {
+        service = this;
+        super.onCreate();
+    }
+
+    @Override
     protected void onHandleIntent(@NonNull Intent intent) {
-        startTimer();
+        startCheckSensorEventQueueThread();
         this.startServiceAndNotify(
                 this,
                 this,
@@ -44,80 +56,81 @@ public class SensorCollectionService extends IntentService implements SensorEven
         );
 
         SensorManager sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        sTemperature = sensorManager.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE);
         sAccelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-        sLight = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT);
-        sPressure = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE);
 
-        log("service started");
+        System.out.println("service started");
 
-        if(sPressure != null)
-            sensorManager.registerListener(this, sPressure, SAMPLING_RATE, MAX_REPORT_LATENCY);
-        if(sTemperature != null)
-            sensorManager.registerListener(this, sTemperature, SAMPLING_RATE, MAX_REPORT_LATENCY);
         if(sAccelerometer != null)
-            sensorManager.registerListener(this, sAccelerometer, SAMPLING_RATE, MAX_REPORT_LATENCY);
-        if(sLight != null)
-            sensorManager.registerListener(this, sLight, SAMPLING_RATE, MAX_REPORT_LATENCY);
+            sensorManager.registerListener(this, sAccelerometer, SAMPLING_DELAY, MAX_REPORT_LATENCY);
     }
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (sTemperature != null)
-            if (event.sensor.getName().equals(sTemperature.getName()))
-            {
-                logSensorData(lastTemp, event);
-            }
-
         if (sAccelerometer != null)
             if (event.sensor.getName().equals(sAccelerometer.getName()))
             {
-                logSensorData(lastAccel, event);
-            }
-
-        if (sPressure != null)
-            if (event.sensor.getName().equals(sPressure.getName()))
-            {
-                logSensorData(lastPressure, event);
-            }
-
-        if (sLight != null)
-            if (event.sensor.getName().equals(sLight.getName()))
-            {
-                logSensorData(lastLight, event);
+                enqueueNewSensorData(event);
             }
     }
 
     @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        log("Sensor " + sensor.getName() + " changed to accuracy: " + accuracy);
-    }
+    public void onAccuracyChanged(Sensor sensor, int accuracy) { }
 
-    public void logSensorData(float[] oldData, SensorEvent event){
-        if (!Arrays.equals(oldData, event.values)) {
-            oldData = event.values;
-            log(event.sensor.getName() + ": " + Arrays.toString(event.values));
+    public void enqueueNewSensorData(SensorEvent event){
+        if (!Arrays.equals(lastAccel, event.values)) {
+            lastAccel = Arrays.copyOf(event.values, event.values.length);
+            sensorEventQueue.add(event);
         }
     }
 
-    public void log(String msg) {
-        System.out.println(SENSOR_COLLECTION_SERVICE_RUNTIME + "s : " + msg);
-    }
-
-    /**
-     * for testing
-     */
-    private void startTimer() {
+    private void startCheckSensorEventQueueThread() {
         new Thread(() -> {
-            while (true) {
+            while(true) {
                 try {
-                    Thread.sleep(1000L);
-                    SENSOR_COLLECTION_SERVICE_RUNTIME++;
+                    Thread.sleep(2000L);
+                    long timeSinceLastRequest = System.currentTimeMillis() - lastRequestTime;
+                    if (sensorEventQueue.size() >= MAX_QUEUE_SIZE || timeSinceLastRequest > MAX_REQUEST_DELAY) {
+                        dumpSensorQueue();
+                    }
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-
             }
         }).start();
+    }
+
+    private SensorEvent[] decimateSensorData(Object[] data) {
+        for (int i = 0; i < data.length; i++)
+            if (i % 10 != 0) data[i] = null;
+
+        int i = 0;
+        int j = 0;
+        int len = 0;
+        while (i < data.length) {
+            if (data[i] == null) {
+                j = i + 1;
+                while (j < data.length) {
+                    if (data[j] != null) {
+                        data[i] = data[j];
+                        data[j] = null;
+                        len = i+1;
+                        break;
+                    }
+                    j++;
+                }
+            }
+            i++;
+        }
+        return Arrays.copyOf(data, len, SensorEvent[].class);
+    }
+
+    public void dumpSensorQueue() {
+        Gson gson = new Gson();
+        Object[] arr = sensorEventQueue.toArray();
+        String json = gson.toJson(decimateSensorData(arr));
+//        this.makePost(URL, json);
+        lastRequestTime = System.currentTimeMillis();
+        System.out.println(json);
+        sensorEventQueue.clear();
     }
 }
